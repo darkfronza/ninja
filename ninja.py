@@ -6,7 +6,10 @@ import os
 from os.path import join, abspath, realpath, isdir, isfile, dirname
 
 import importlib.util
+from selenium import webdriver
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 
 class Ninja:
@@ -31,16 +34,19 @@ class Ninja:
         self.app_root_dir = dirname(abspath(realpath(sys.argv[0])))
         os.chdir(self.app_root_dir)
 
+        # Setup Ninja variables
         self.config = {}             # Configuration stored as a dictionary
-        self.module_name = ''        # The specified module on which Ninja will dispatch tasks
-
+        self.module_name = ''        # The specified module on which Ninja will dispatch tasks to
+        self.observer = Observer()   # Our filesystem watchdog
         self.logger = None           # Ninja logger instance
-        self.task_handler = None     # Task Handler
+        self.task_handler = None     # TaskHandler class instance
 
-        self.setup_log()             # 1. setup Logging system
-        self.load_configuration()    # 2. Load configuration
-        self.check_runtime()         # 3. Check if we are good to go, firefox binary is set, etc
-        self.load_module_handler()   # 4. Dynamically load Module handler specified in the configuration.
+    def setup(self):
+        # Setup Ninja
+        self.setup_log()            # 1. setup Logging system
+        self.load_configuration()   # 2. Load configuration
+        self.check_runtime()        # 3. Check if we are good to go, firefox binary is set, jobs_folder exists, etc
+        self.load_module_handler()  # 4. Dynamically load Module handler specified in the configuration param 'module'.
 
     def setup_log(self):
         log_dir = join(self.app_root_dir, "log")
@@ -88,31 +94,56 @@ class Ninja:
             self.logger.fatal("Could not locate firefox profile: {}. Aborting...".format(self.config['firefox_profile']))
             sys.exit(1)
 
+        if not isdir(self.config['jobs_folder']):
+            self.logger.info("Jobs folder not found, trying to create it: {}".format(self.config["jobs_folder"]))
+            try:
+                os.mkdir(self.config['jobs_folder'])
+            except:
+                self.logger.fatal("Unable to create jobs directory! Aborting...")
+                sys.exit(1)
+
         self.logger.info("Runtime check successful.")
 
     def load_module_handler(self):
-        self.logger.info("Loading Module Handler <{}>...".format(self.module_name))
+        self.logger.info("Loading Module <{}>...".format(self.module_name))
 
         module_dir = join(self.app_root_dir, self.module_name)
         if not isdir(module_dir):
             self.logger.fatal("Could not locate module dir: {}. Aborting...".format(module_dir))
             sys.exit(1)
 
+        # 1. Load module spec
         module_path = '{}.{}'.format(self.module_name, Ninja.MODULE_HANDLER_NAME)
         module_spec = importlib.util.find_spec(module_path)
 
         if module_spec is None:
-            self.logger.fatal("Could not load module specified: {}. Aborting...".format(module_path))
+            self.logger.fatal("Could not load specified module: {}. Aborting...".format(module_path))
             sys.exit(1)
 
-        self.task_handler = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(self.task_handler)
+        # 2. Load module from its spec
+        self.module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(self.module)
 
-        if not hasattr(self.task_handler, "TaskHandler"):
+        # 3. Load TaskHandler class, modules should implement this class
+        if not hasattr(self.module, "TaskHandler"):
             self.logger.fatal("Module <{}> has no TaskHandler class implementation! Aborting...".format(module_path))
             sys.exit(1)
 
-        self.logger.info("Module Handler successfully loaded!")
+        self.task_handler = getattr(self.module, "TaskHandler")
+        if not isinstance(self.task_handler, type):
+            self.logger.fatal("TaskHandler from Module <{}> must be a class. Detected type was {}. Aborting...".format(
+                module_path, str(type(self.task_handler))
+            ))
+            sys.exit(1)
+
+        self.task_handler = self.task_handler(config=self.config)
+        if hasattr(self.task_handler, 'setup') and callable(self.task_handler.setup):
+            self.logger.info("Initializing TaskHandler...")
+            if not self.task_handler.setup():
+                self.logger.fatal("Failed to initialize TaskHandler. Aborting...")
+                sys.exit(1)
+
+        self.logger.info("Module successfully loaded!")
 
 
 if __name__ == '__main__':
