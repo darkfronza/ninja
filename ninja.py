@@ -6,6 +6,8 @@ import os
 from os.path import join, abspath, realpath, isdir, isfile, dirname
 
 import importlib.util
+
+import time
 from selenium import webdriver
 
 from watchdog.observers import Observer
@@ -41,14 +43,32 @@ class Ninja:
         self.logger = None           # Ninja logger instance
         self.task_handler = None     # TaskHandler class instance
 
+        self.task_manager = Ninja.TaskManager()  # our watchdog, job dispatcher
+
     def setup(self):
         # Setup Ninja
-        self.setup_log()            # 1. setup Logging system
-        self.load_configuration()   # 2. Load configuration
-        self.check_runtime()        # 3. Check if we are good to go, firefox binary is set, jobs_folder exists, etc
-        self.load_module_handler()  # 4. Dynamically load Module handler specified in the configuration param 'module'.
+        self._setup_log()            # 1. setup Logging system
+        self._load_configuration()   # 2. Load configuration
+        self._check_runtime()        # 3. Check if we are good to go, firefox binary is set, jobs_folder exists, etc
+        self._load_module_handler()  # 4. Dynamically load Module handler specified in the configuration param 'module'.
 
-    def setup_log(self):
+    def run(self):
+        self.observer.schedule(self.task_manager, self.config['jobs_folder'], recursive=False)
+        self.observer.start()
+        self.logger.info("Ninja started successfully!")
+        self.logger.info("Waiting for jobs at {}...".format(self.config['jobs_folder']))
+
+        try:
+            while True:
+                time.sleep(10)
+        except Exception as ex:
+            self.logger.critical("Caught exception: {}".format(str(ex)))
+            self.observer.stop()
+
+        self.observer.join()
+
+
+    def _setup_log(self):
         log_dir = join(self.app_root_dir, "log")
         if not isdir(log_dir):
             os.mkdir(log_dir)
@@ -65,9 +85,14 @@ class Ninja:
         self.logger.addHandler(handler)
         self.logger.propagate = True
 
+        if os.environ.get("LOGLEVEL", None) is not None:
+            consoleHandler = logging.StreamHandler()
+            consoleHandler.setFormatter(formatter)
+            self.logger.addHandler(consoleHandler)
+
         self.logger.info("Starting Ninja... App Dir = {}".format(self.app_root_dir))
 
-    def load_configuration(self):
+    def _load_configuration(self):
         cfg_file_path = join(self.app_root_dir, Ninja.CONFIG_FILE)
         self.logger.info("Loading configuration file {} ...".format(cfg_file_path))
 
@@ -83,7 +108,7 @@ class Ninja:
 
         self.module_name = self.config['module']
 
-    def check_runtime(self):
+    def _check_runtime(self):
         self.logger.info("Checking if runtime dependencies are ok...")
 
         if not isfile(self.config['firefox_binary']):
@@ -104,7 +129,7 @@ class Ninja:
 
         self.logger.info("Runtime check successful.")
 
-    def load_module_handler(self):
+    def _load_module_handler(self):
         self.logger.info("Loading Module <{}>...".format(self.module_name))
 
         module_dir = join(self.app_root_dir, self.module_name)
@@ -145,6 +170,17 @@ class Ninja:
 
         self.logger.info("Module successfully loaded!")
 
+    class TaskManager(FileSystemEventHandler):
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.logger = logging.getLogger('TaskManager')
+
+        def on_created(self, event):
+            self.logger.info("New job file: {}".format(event.src_path))
+
 
 if __name__ == '__main__':
     ninja = Ninja()
+    ninja.setup()
+    ninja.run()
