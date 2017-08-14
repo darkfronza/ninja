@@ -3,12 +3,14 @@ import logging
 import logging.handlers
 import sys
 import os
+from json.decoder import JSONDecodeError
+from threading import Lock
+import time
+from collections import deque
+
 from os.path import join, abspath, realpath, isdir, isfile, dirname
 
 import importlib.util
-
-import time
-from selenium import webdriver
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -32,18 +34,20 @@ class Ninja:
     MODULE_HANDLER_NAME = 'task_handler'
 
     def __init__(self):
-        # Resolve Ninja' script absolute path
+        # Resolve Ninja's script absolute path
         self.app_root_dir = dirname(abspath(realpath(sys.argv[0])))
         os.chdir(self.app_root_dir)
 
         # Setup Ninja variables
+        self.job_queue = deque()     # Pending jobs' queue
+        self.job_mutex = Lock()      # queue Mutex
         self.config = {}             # Configuration stored as a dictionary
         self.module_name = ''        # The specified module on which Ninja will dispatch tasks to
         self.observer = Observer()   # Our filesystem watchdog
         self.logger = None           # Ninja logger instance
         self.task_handler = None     # TaskHandler class instance
 
-        self.task_manager = Ninja.TaskManager()  # our watchdog, job dispatcher
+        self.task_manager = Ninja.TaskManager(job_queue=self.job_queue, job_mutex=self.job_mutex)  # our watchdog, job dispatcher
 
     def setup(self):
         # Setup Ninja
@@ -58,14 +62,38 @@ class Ninja:
         self.logger.info("Ninja started successfully!")
         self.logger.info("Waiting for jobs at {}...".format(self.config['jobs_folder']))
 
+        # Job dispatcher loop.
+        # Checks for new jobs on the job queue, pop and process them.
         try:
             while True:
-                time.sleep(10)
+                # if queue is not empty
+                if self.job_queue:
+                    with self.job_mutex:
+                        job_file = self.job_queue.popleft()
+                        self.run_job(job_file)
+
+                time.sleep(1)
         except Exception as ex:
             self.logger.critical("Caught exception: {}".format(str(ex)))
             self.observer.stop()
 
         self.observer.join()
+
+    def run_job(self, job_file):
+        try:
+            job_fp = open(job_file)
+        except IOError as io_err:
+            self.logger.critical("FAILED TO OPEN JOB FILE {}: {}".format(job_file, str(io_err)))
+        else:
+            try:
+                job_data = json.load(job_fp)
+            except (JSONDecodeError, ValueError) as json_err:
+                self.logger.critical("FAILED TO DECODE(json) JOB FILE {}: {}".format(job_file, str(json_err)))
+            else:
+                self.logger.info("Running job {}".format(job_file))
+                pass
+            finally:
+                job_fp.close()
 
 
     def _setup_log(self):
@@ -86,9 +114,9 @@ class Ninja:
         self.logger.propagate = True
 
         if os.environ.get("LOGLEVEL", None) is not None:
-            consoleHandler = logging.StreamHandler()
-            consoleHandler.setFormatter(formatter)
-            self.logger.addHandler(consoleHandler)
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
 
         self.logger.info("Starting Ninja... App Dir = {}".format(self.app_root_dir))
 
@@ -173,11 +201,14 @@ class Ninja:
     class TaskManager(FileSystemEventHandler):
 
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
             self.logger = logging.getLogger('TaskManager')
+            self.queue = kwargs['job_queue']
+            self.queue_mutex = kwargs['job_mutex']
 
         def on_created(self, event):
             self.logger.info("New job file: {}".format(event.src_path))
+            with self.queue_mutex:
+                self.queue.append(event.src_path)
 
 
 if __name__ == '__main__':
