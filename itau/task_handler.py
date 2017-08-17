@@ -76,5 +76,3 @@ class TaskHandler:
         finally:
             self.web_driver.quit()
             del self.web_driver
-
-        # self.web_driver.quit()

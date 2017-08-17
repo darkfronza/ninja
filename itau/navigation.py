@@ -51,22 +51,23 @@ def goto_screen(driver, screen_name):
             search_element = wait.until(EC.visibility_of_element_located((By.XPATH, '//input[@id="input-busca"]')))
         except TimeoutException:
             log.info('Search field not found: //input[@id="input-busca"]')
-            return False
+            # return False
         else:
             log.info("Search field was successfully found!")
             search_found = True
 
     # If ITAU search-navigation element was found, use it, faster.
     if search_found:
-        hover = ActionChains(driver).move_to_element(search_element)
-        hover.perform()
-
         search_element.click()
         search_element.clear()
         search_element.send_keys(nav['search'])
 
+        hover = ActionChains(driver).move_to_element(search_element)
+        hover.perform()
+
+        time.sleep(1)
         search_element.click()
-        time.sleep(2)
+        time.sleep(1)
 
         try:
             target = '//div[contains(text(),"{}")]/parent::a'.format(nav['search'][-30:])
@@ -74,13 +75,13 @@ def goto_screen(driver, screen_name):
             link = wait.until(EC.element_to_be_clickable((By.XPATH, target)))
         except TimeoutException:
             log.error('Unable to locate element: {}'.format(target))
-            return False
+            # return False
+        else:
+            log.info("Clicking on link {}".format(target))
 
-        log.info("Clicking on link {}".format(target))
+            link.click()
 
-        link.click()
-
-        return True
+            return True
 
     elif nav['menu'] is not None:  # Navigate by MENU button
         menu_xpath = '//a[@class="btn-nav"][contains(text(),"menu")]'
