@@ -299,7 +299,8 @@ class Ninja:
         self.logger.info("Module successfully loaded!")
 
     def take_ss(self, driver):
-        ss_file = join(self.app_root_dir, self.current_job + ".png")
+
+        ss_file = join(self.ss_dir, basename(self.current_job) + ".png")
         driver.get_screenshot_as_file(ss_file)
 
     class TaskManager(FileSystemEventHandler):

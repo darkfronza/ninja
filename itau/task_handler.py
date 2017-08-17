@@ -8,13 +8,14 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
-from itau import command_validator, navigation, tef_ch, operation_codes
+from itau import command_validator, navigation, tef_ch, operation_codes, ted_doc
 from itau.login import login
 
 
 class TaskHandler:
     # Required configuration parameters for this specific Instance
-    REQUIRED_CFG_PARAMS = ('account_branch_itau', 'account_number_itau', 'account_pin_itau', 'account_cpf_itau')
+    REQUIRED_CFG_PARAMS = ('account_branch_itau', 'account_number_itau',
+                           'account_pin_itau', 'account_cpf_itau', 'token_path')
 
     def __init__(self, *args, **kwargs):
         self.ninja = kwargs['ninja']
@@ -54,6 +55,13 @@ class TaskHandler:
                 self.ninja.confirm_job(job_data, status='err_sys_invalid_job',
                                        status_message="Required field is missing -> '{}'".format(required_field))
                 return False
+
+        if job_data['account_type'] not in ('SV', 'CH'):
+            self.ninja.confirm_job(job_data,
+                                   status="err_invalid_account_type",
+                                   status_message="account_type must be either 'CH' or 'SV'",
+                                   admin_message="Could not process job sent from API. (Invalid account_type)")
+            return False
 
         return True
 
@@ -97,29 +105,16 @@ class TaskHandler:
             op_code = operation_codes.OP_FAILED
 
             if job_data['account_type'] == 'CH':
-                if job_data['bank_id'] == "341":  # ITAU: TEF between checking account
-                    op_code = tef_ch.execute(self.web_driver, job_data)
+                if job_data['bank_id'] == "341":
+                    op_code = tef_ch.execute(self.web_driver, job_data)  # ITAU: TEF between checking accoun
                 else:
-                    self.ninja.confirm_job(job_data,
-                                           status="err_not_implemented",
-                                           status_message="TED not implemented'",
-                                           admin_message="TED not implemented")
+                    op_code = ted_doc.execute(self.web_driver, job_data)  # TED
+
             elif job_data['account_type'] == 'SV':
                 if job_data['bank_id'] == "341":
-                    self.ninja.confirm_job(job_data,
-                                           status="err_not_implemented",
-                                           status_message="TEF between savings account (SV) not implemented'",
-                                           admin_message="TEF between savings account (SV) not implemented'")
+                    op_code = operation_codes.OP_FAILED
                 else:
-                    self.ninja.confirm_job(job_data,
-                                           status="err_not_implemented",
-                                           status_message="DOC not implemented'",
-                                           admin_message="DOC not implemented")
-            else:
-                self.ninja.confirm_job(job_data,
-                                       status="err_invalid_account_type",
-                                       status_message="account_type must be either 'CH' or 'SV'",
-                                       admin_message="Could not process job sent from API. (Invalid account_type)")
+                    op_code = operation_codes.OP_FAILED
 
             if op_code == operation_codes.OP_SUCCESS:
                 self.ninja.confirm_job(job_data)
@@ -131,7 +126,7 @@ class TaskHandler:
                     msg += ": Timed out"
 
                 self.ninja.confirm_job(job_data, "err_operation_failed", status_message=msg, admin_message=msg)
-
+                self.ninja.take_ss(self.web_driver)
         finally:
             pass
             # self.web_driver.quit()

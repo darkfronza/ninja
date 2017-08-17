@@ -6,6 +6,7 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
+from itau import token_watcher
 
 ITAU_LOGIN_PAGE = "https://www.itau.com.br"
 
@@ -73,19 +74,27 @@ def login_page_3(log, config, driver):
 
 # PAGE 4: SMS TOKEN
 def login_page_4(log, config, driver):
-    # sms_btn = driver.wait.until(EC.visibility_of_element_located((By.XPATH, '//a[@id="sms-gerarCodigo"]')))
-    # sms_btn.click()
+    time.sleep(1)
+    token_watcher.clear_token(config['token_path'])
 
-    # TODO: Read SMS token
-    # token = read_token()
-    # sms_input = driver.wait.until(EC.visibility_of_element_located((By.XPATH, '//input[@id="sms-codigoRecebido"]')))
-    # sms_input.click()
-    # sms_input.send_keys(token)
+    sms_btn = driver.wait.until(EC.element_to_be_clickable((By.XPATH, '//a[@id="sms-gerarCodigo"]')))
+    sms_btn.click()
 
-    time.sleep(30)
+    time.sleep(5)
 
-    # submit_btn = driver.find_element_by_xpath('//a[@id="sms-codigoOk"]')
-    # submit_btn.click()
+    token = token_watcher.read_token(config['token_path'])
+    if token == '':
+        raise TimeoutException()
+
+    sms_input = driver.wait.until(EC.element_to_be_clickable((By.XPATH, '//input[@id="sms-codigoRecebido"]')))
+    sms_input.click()
+    sms_input.clear()
+    sms_input.send_keys(token)
+
+    time.sleep(1)
+
+    submit_btn = driver.find_element_by_xpath('//a[@id="sms-codigoOk"]')
+    submit_btn.click()
 
 
 def login(config, driver):
