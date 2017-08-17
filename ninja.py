@@ -5,6 +5,7 @@ import logging.handlers
 import os
 import sys
 import time
+import traceback
 from collections import deque
 from json.decoder import JSONDecodeError
 from os.path import join, abspath, realpath, basename, isdir, isfile, dirname
@@ -57,7 +58,9 @@ class Ninja:
 
         self.task_manager = Ninja.TaskManager(job_queue=self.job_queue, job_mutex=self.job_mutex)  # our watchdog, job dispatcher
 
-    def setup(self):
+        self._setup()
+
+    def _setup(self):
         # Setup Ninja
         self._setup_log()            # 1. setup Logging system
         self._load_configuration()   # 2. Load configuration
@@ -79,7 +82,7 @@ class Ninja:
                     with self.job_mutex:
                         job_file_name = self.job_queue.popleft()
 
-                    self.validate_job(job_file_name)
+                    self._validate_job(job_file_name)
 
                 time.sleep(1)
         except Exception as ex:
@@ -88,7 +91,7 @@ class Ninja:
 
         self.observer.join()
 
-    def validate_job(self, job_file_name):
+    def _validate_job(self, job_file_name):
         self.logger.info("Validating job {} ...".format(job_file_name))
 
         job_file_name = join(self.job_folder, job_file_name)
@@ -98,17 +101,17 @@ class Ninja:
             job_fp = open(job_file_name)
         except IOError as io_err:
             self.logger.critical("Failed to open job file {}: {}".format(job_file_name, str(io_err)))
-            self.job_load_failed()
+            self._job_load_failed()
         else:
             try:
                 job_data = json.load(job_fp)
             except (JSONDecodeError, ValueError) as json_err:
                 self.logger.critical("FAILED TO DECODE(json) JOB FILE {}: {}".format(job_file_name, str(json_err)))
-                self.job_load_failed()
+                self._job_load_failed()
             else:
                 if 'operation' in job_data:
                     self.logger.info("Running job {} ...".format(job_file_name))
-                    self.run_job(job_data)
+                    self._run_job(job_data)
                 else:
                     self.logger.critical("INVALID JOB FILE: Required field is missing -> 'operation'")
                     self.confirm_job(data=job_data, status='err_sys_invalid_job',
@@ -116,7 +119,7 @@ class Ninja:
             finally:
                 job_fp.close()
 
-    def run_job(self, job_data):
+    def _run_job(self, job_data):
         operation = job_data['operation']
 
         # Forward job validation to configured module of this instance
@@ -157,7 +160,7 @@ class Ninja:
             else:
                 self.logger.critical("Failed to create confirmation file: {}".format(confirm_file_name))
 
-    def job_load_failed(self):
+    def _job_load_failed(self):
         """Create an error-confirmation file for current job.
 
         If, for some reason, it wasn't possible to load source job file, this method should be called.
@@ -319,6 +322,12 @@ class Ninja:
 
 
 if __name__ == '__main__':
-    ninja = Ninja()
-    ninja.setup()
-    ninja.run()
+    try:
+        ninja = Ninja()
+        ninja.run()
+    except Exception as ex:
+        with open("crash_log.txt", "w") as log:
+            log.write("UNCAUGHT EXCEPTION: {}".format(type(ex).__name__))
+            log.write("\n\nStack Trace:\n")
+            log.write(traceback.format_exc())
+
